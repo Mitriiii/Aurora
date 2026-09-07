@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "aurora",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["-c", "cd /Users/ryanmitri/Desktop/Projects/AURORA && /opt/miniconda3/envs/aurora/bin/python -m uvicorn server.main:app --host 0.0.0.0 --port 8010"],
+      "port": 8010
+    }
+  ]
+}

@@ -69,15 +69,23 @@ class ScenarioTimes:
     trip_3_t: float = 43.0      # trip_1_t + 21s, matching the real interval
     horizon_t: float = 60.0
 
+    # Benign-scenario-only: the real event's SECOND precursor oscillation
+    # (~0.2 Hz, 12:16-12:22 CEST) came roughly 13 minutes after the first
+    # (~0.6 Hz, 12:03-12:07). Compressed here to a same-order-of-magnitude
+    # gap so both precursors, and their self-damping, fit inside one run.
+    benign_second_kick_t: float = 20.0
+
     @property
     def collapse_budget_t(self) -> float:
         """Real event: ~27s from first trip to total collapse."""
         return self.trip_1_t + 27.0
 
 
-def _add_common_devices(ss, times: ScenarioTimes):
-    """Add the surge shunt, the three trip-PQ devices, and the oscillation
-    kick -- present (but not yet toggled) in every branch."""
+def _add_common_devices(ss, times: ScenarioTimes, include_first_kick: bool = True):
+    """Add the surge shunt, the three trip-PQ devices, and (by default) the
+    first oscillation kick -- present (but not yet toggled beyond this) in
+    every branch. `include_first_kick=False` is used by the Phase 1
+    zero-disturbance baseline, which must not perturb the system at all."""
 
     bank_b = SURGE_B_PU / SURGE_STAGES
     for s in range(1, SURGE_STAGES + 1):
@@ -91,22 +99,75 @@ def _add_common_devices(ss, times: ScenarioTimes):
     ss.add('PQ', dict(idx='battery', bus=BATTERY_BUS, Vn=230,
                        p0=0.0, q0=0.0, u=0))
 
-    ss.add('Toggle', dict(model='Line', dev=LINE_KICK_IDX, t=times.line_kick_t))
-    ss.add('Toggle', dict(model='Line', dev=LINE_KICK_IDX, t=times.line_kick_t + times.line_kick_duration))
+    if include_first_kick:
+        ss.add('Toggle', dict(model='Line', dev=LINE_KICK_IDX, t=times.line_kick_t))
+        ss.add('Toggle', dict(model='Line', dev=LINE_KICK_IDX, t=times.line_kick_t + times.line_kick_duration))
+
+
+def _base_system(times: ScenarioTimes):
+    """Shared setup: load the stock case, apply the reduced-inertia
+    background condition and the governor-limit fix. Every scenario
+    (healthy, benign, uncorrected, corrected) starts from this.
+
+    IMPORTANT: the stock kundur_full.xlsx case ships with its OWN built-in
+    disturbance -- a Toggle that trips Line_8 at t=2.0s (confirmed via
+    `ss.Toggle.as_df()` on the unmodified case). Phase 0 intentionally uses
+    that stock event to prove the toolchain works. Every scenario we script
+    ourselves must NOT inherit it silently, or "zero disturbance" and
+    "exactly the two real precursor kicks" both become false claims. It is
+    disabled here, once, for every AURORA-authored scenario.
+    """
+    ss = andes.load(andes.get_case('kundur/kundur_full.xlsx'), setup=False, no_output=True)
+    ss.Toggle.u.v = [0]  # disable the stock case's built-in Line_8 @ t=2s event
+    ss.GENROU.M.v = [v * INERTIA_SCALE for v in ss.GENROU.M.v]
+    ss.TGOV1.VMIN.v = [v * 0.5 for v in ss.TGOV1.VMIN.v]
+    return ss
+
+
+def build_healthy(times: ScenarioTimes | None = None):
+    """Phase 1 baseline: the wired pipeline (reduced inertia, governor fix,
+    the same devices present in every other scenario) with ZERO disturbance
+    -- no line kick, no surge, no trips. Must stay flat. This is the
+    "everything normal" reference the fault scenarios deviate from."""
+    times = times or ScenarioTimes()
+    ss = _base_system(times)
+    _add_common_devices(ss, times, include_first_kick=False)
+    ss.setup()
+    return ss, times
+
+
+def build_benign(times: ScenarioTimes | None = None):
+    """Non-cascading control scenario: the real event's own two precursor
+    oscillations (~0.6 Hz at 12:03-12:07 and ~0.2 Hz at 12:16-12:22 CEST)
+    that wobbled and self-damped WITHOUT any reactive surge, generation
+    trip, or collapse -- operators handled both in real life. No surge bank
+    and no trip is ever toggled here; only two brief tie-line perturbations
+    (using two different lines, as the real precursors were distinct
+    events) that the grid must damp out on its own.
+
+    This exists to test the detector for false alarms: a detector that
+    fires on ordinary, self-recovering transient oscillation is not an
+    early-warning system, it's a nuisance alarm generator."""
+    times = times or ScenarioTimes()
+    ss = _base_system(times)
+    _add_common_devices(ss, times, include_first_kick=True)
+
+    # Second precursor: a brief perturbation on a different tie-line branch,
+    # well after the first has damped out, mirroring the real ~13-minute
+    # gap between the two recorded precursor oscillations.
+    ss.add('Toggle', dict(model='Line', dev='Line_5', t=times.benign_second_kick_t))
+    ss.add('Toggle', dict(model='Line', dev='Line_5',
+                          t=times.benign_second_kick_t + times.line_kick_duration))
+
+    ss.setup()
+    return ss, times
 
 
 def build_uncorrected(times: ScenarioTimes | None = None):
     """The real, uncorrected timeline: surge switches on, all three
     generation trips fire on schedule, no intervention."""
     times = times or ScenarioTimes()
-    ss = andes.load(andes.get_case('kundur/kundur_full.xlsx'), setup=False, no_output=True)
-
-    ss.GENROU.M.v = [v * INERTIA_SCALE for v in ss.GENROU.M.v]
-    # Loosen the governor's LAG_y floor: the added generation-trip PQ devices
-    # shift the initial dispatch enough to clip the stock case's VMIN=3.6,
-    # which is a benign initialization warning, not a real instability --
-    # avoided outright so it doesn't read as a failure in the logs.
-    ss.TGOV1.VMIN.v = [v * 0.5 for v in ss.TGOV1.VMIN.v]
+    ss = _base_system(times)
 
     _add_common_devices(ss, times)
 
@@ -138,14 +199,7 @@ def build_corrected(times: ScenarioTimes, detection_t: float):
     detection_t already happened in reality and is kept, matching the
     honest framing that correction only affects what hasn't happened yet.
     """
-    ss = andes.load(andes.get_case('kundur/kundur_full.xlsx'), setup=False, no_output=True)
-
-    ss.GENROU.M.v = [v * INERTIA_SCALE for v in ss.GENROU.M.v]
-    # Loosen the governor's LAG_y floor: the added generation-trip PQ devices
-    # shift the initial dispatch enough to clip the stock case's VMIN=3.6,
-    # which is a benign initialization warning, not a real instability --
-    # avoided outright so it doesn't read as a failure in the logs.
-    ss.TGOV1.VMIN.v = [v * 0.5 for v in ss.TGOV1.VMIN.v]
+    ss = _base_system(times)
 
     _add_common_devices(ss, times)
 
