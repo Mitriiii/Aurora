@@ -1,0 +1,7 @@
+andes>=2.0.0
+pandapower
+fastapi
+uvicorn[standard]
+websockets
+numpy
+pandas

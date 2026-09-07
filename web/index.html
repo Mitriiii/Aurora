@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AURORA — Grid Stability Intelligence</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="sim-watermark">SIMULATION</div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">AURORA</span>
+      <span class="brand-sub">Grid Stability Intelligence — SIMULATION, not connected to any real control system</span>
+    </div>
+    <div class="controls">
+      <label class="speed-label">speed
+        <select id="speedSelect">
+          <option value="1">1x</option>
+          <option value="4" selected>4x</option>
+          <option value="8">8x</option>
+          <option value="20">20x</option>
+        </select>
+      </label>
+      <button id="runBtn">Run scenario</button>
+      <button id="playBtn" disabled>Play</button>
+      <span id="statusPill" class="status-pill idle">idle</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel countdown-panel" id="countdownPanel">
+      <div class="countdown-label">grid state</div>
+      <div class="countdown-value" id="countdownValue">—</div>
+      <div class="countdown-detail" id="countdownDetail">Run the scenario to begin.</div>
+    </section>
+
+    <section class="panel diagram-panel">
+      <div class="diagram-header">
+        <div class="diagram-title" id="diagramTitleLeft">What actually happened</div>
+        <div class="diagram-title" id="diagramTitleRight" style="display:none">AURORA intervenes</div>
+      </div>
+      <div class="diagram-grid" id="diagramGrid">
+        <div class="diagram-cell" id="cellLeft"></div>
+        <div class="diagram-cell" id="cellRight" style="display:none"></div>
+      </div>
+    </section>
+
+    <section class="panel vitals-panel">
+      <h2>Vitals — AURORA view <span class="tag live">50 Hz synchrophasor stream (simulated)</span></h2>
+      <div class="vitals-grid" id="vitalsGrid"></div>
+    </section>
+
+    <section class="panel scada-panel">
+      <h2>Traditional SCADA view <span class="tag stale">4s refresh, sparse</span></h2>
+      <div class="scada-grid" id="scadaGrid"></div>
+      <div class="scada-note">This is what a control-room operator saw at the time: the same
+        physical event, refreshed roughly every 4 seconds, no reactive-margin or oscillation-growth
+        derivation. Independent post-event analysis found the PMUs nearest the fault site were
+        offline — this panel is deliberately starved of the signal AURORA is built to surface.</div>
+    </section>
+
+    <section class="panel credibility-panel">
+      <h2>Real grid, right now <span class="tag public">PUBLIC HISTORICAL/LIVE DATA</span></h2>
+      <div id="credibilityBody">loading…</div>
+    </section>
+
+    <section class="panel report-panel">
+      <h2>Forensic report</h2>
+      <div id="reportBody" class="report-body">Run the scenario, then let it play to see the report.</div>
+    </section>
+  </main>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
