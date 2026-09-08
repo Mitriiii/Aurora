@@ -62,16 +62,25 @@ INERTIA_SCALE = 0.42            # scales GENROU M toward the ~2.3s floor
 LINE_KICK_IDX = "Line_4"        # tie-line branch used to kick off the first precursor oscillation
 TIE_TRIP_LINE = "Line_5"        # sustained (not reclosed) single tie-line loss -- a real device event,
                                  # not an external admittance -- that triggers the excitation stress
+TIE_TRIP_LINE_2 = "Line_6"      # second sustained tie-line loss (real N-2 contingency: two of the
+                                 # three parallel Line_4/5/6 circuits lost, only one left in service)
 
 # Under-excitation fault: which generators lose reactive-absorption headroom,
 # and how far. EXDC2.VRMIN defaults to -4.16 p.u. in this case file (read
 # and cached at build time, not hardcoded, in case the case file changes).
-EXCITATION_FAULT_GENS = [3, 4]      # Area-2 machines, nearest the tie/trip region
-VRMIN_FAULT_TARGET = 4.8            # p.u. -- raised well above the generators' natural
-                                     # operating field voltage (~1.8-2.2 p.u. steady state),
-                                     # so once the ramp catches up, they can no longer
-                                     # reduce excitation enough to absorb reactive power.
-EXCITATION_RAMP_DURATION_S = 14.0   # gradual, not a step: ramps over ~14s once triggered
+# The real event's reactive shortfall was fleet-wide, not isolated to one
+# area, so Area-2 machines (3,4) get the full fault and Area-1 machines
+# (1,2) get a genuinely partial one -- a smaller target, same ramp timing.
+EXCITATION_FAULT_GENS = [3, 4]          # Area-2 machines, nearest the tie/trip region: full fault
+VRMIN_FAULT_TARGET = 4.8                # p.u. -- raised well above the generators' natural
+                                         # operating field voltage (~1.8-2.2 p.u. steady state),
+                                         # so once the ramp catches up, they can no longer
+                                         # reduce excitation enough to absorb reactive power.
+EXCITATION_FAULT_GENS_PARTIAL = [1, 2]  # Area-1 machines: partial fault
+VRMIN_FAULT_TARGET_PARTIAL = 2.0        # p.u. -- a real but smaller reduction in headroom than
+                                         # the full-fault group; still above natural vf (~1.8-2.2)
+                                         # so it can bind, but far short of VRMIN_FAULT_TARGET.
+EXCITATION_RAMP_DURATION_S = 14.0       # gradual, not a step: ramps over ~14s once triggered
 
 PF_LIMIT = 0.98                 # Spain's grid-code reactive power-factor band
 
@@ -138,44 +147,53 @@ def _base_system(times: ScenarioTimes):
 
 
 def _cache_vrmin_healthy(ss):
-    """Reads and stashes each excitation-faulted generator's stock VRMIN
-    value on the system object itself, before any mutation, so the ramp has
-    a real reference point instead of a hardcoded number."""
-    idxs = [ss.EXDC2.idx.v.index(g) for g in EXCITATION_FAULT_GENS]
-    ss._excitation_fault_idx = idxs
-    ss._vrmin_healthy = ss.EXDC2.VRMIN.v[idxs[0]]
+    """Reads and stashes each excitation-faulted generator group's stock
+    VRMIN value on the system object itself, before any mutation, so the
+    ramp has a real reference point instead of a hardcoded number."""
+    idxs_full = [ss.EXDC2.idx.v.index(g) for g in EXCITATION_FAULT_GENS]
+    idxs_partial = [ss.EXDC2.idx.v.index(g) for g in EXCITATION_FAULT_GENS_PARTIAL]
+    ss._excitation_fault_idx = idxs_full
+    ss._excitation_fault_idx_partial = idxs_partial
+    ss._vrmin_healthy = ss.EXDC2.VRMIN.v[idxs_full[0]]
     return ss
 
 
-def excitation_ramp_value(t: float, times: ScenarioTimes, vrmin_healthy: float,
-                           detection_t: float | None = None) -> float:
-    """Computes the current VRMIN value for the excitation-faulted
-    generators at time t. If `detection_t` is given and t has reached it,
-    the ramp reverses back toward the healthy value over the same duration
-    -- modeling AURORA restoring the exciters' reactive-absorption
-    capability (the corrected branch)."""
+def _ramp_frac(t: float, times: ScenarioTimes, detection_t: float | None = None) -> float:
+    """Fraction (0-1) of the way through the fault ramp at time t. If
+    `detection_t` is given and reached, the ramp reverses back toward 0
+    (healthy) over the same duration -- modeling AURORA restoring the
+    exciters' reactive-absorption capability (the corrected branch)."""
     start = times.excitation_fault_start_t
     dur = EXCITATION_RAMP_DURATION_S
 
     if detection_t is not None and t >= detection_t:
         fault_frac_at_detection = min(1.0, max(0.0, (detection_t - start) / dur))
         recovery_frac = min(1.0, (t - detection_t) / dur)
-        frac = fault_frac_at_detection * (1.0 - recovery_frac)
-    else:
-        frac = min(1.0, max(0.0, (t - start) / dur))
-
-    return vrmin_healthy + frac * (VRMIN_FAULT_TARGET - vrmin_healthy)
+        return fault_frac_at_detection * (1.0 - recovery_frac)
+    return min(1.0, max(0.0, (t - start) / dur))
 
 
-def apply_excitation_ramp(ss, t: float, times: ScenarioTimes, detection_t: float | None = None) -> float:
-    """Mutates EXDC2.VRMIN on the faulted generators in place for the
-    current tick. Must be called every tick from the run loop, between
-    chunked TDS.run() calls -- ANDES parameters are static within a single
-    run() call. Returns the VRMIN value just applied (for logging)."""
-    value = excitation_ramp_value(t, times, ss._vrmin_healthy, detection_t)
+def excitation_ramp_value(t: float, times: ScenarioTimes, vrmin_healthy: float,
+                           detection_t: float | None = None, target: float = VRMIN_FAULT_TARGET) -> float:
+    """Computes the current VRMIN value for one excitation-faulted
+    generator group at time t, ramping toward `target`."""
+    frac = _ramp_frac(t, times, detection_t)
+    return vrmin_healthy + frac * (target - vrmin_healthy)
+
+
+def apply_excitation_ramp(ss, t: float, times: ScenarioTimes, detection_t: float | None = None) -> dict:
+    """Mutates EXDC2.VRMIN on both faulted generator groups (full and
+    partial) in place for the current tick. Must be called every tick from
+    the run loop, between chunked TDS.run() calls -- ANDES parameters are
+    static within a single run() call. Returns the values just applied
+    (for logging)."""
+    value_full = excitation_ramp_value(t, times, ss._vrmin_healthy, detection_t, target=VRMIN_FAULT_TARGET)
+    value_partial = excitation_ramp_value(t, times, ss._vrmin_healthy, detection_t, target=VRMIN_FAULT_TARGET_PARTIAL)
     for i in ss._excitation_fault_idx:
-        ss.EXDC2.VRMIN.v[i] = value
-    return value
+        ss.EXDC2.VRMIN.v[i] = value_full
+    for i in ss._excitation_fault_idx_partial:
+        ss.EXDC2.VRMIN.v[i] = value_partial
+    return {"full": value_full, "partial": value_partial}
 
 
 def build_healthy(times: ScenarioTimes | None = None):
@@ -228,8 +246,11 @@ def build_uncorrected(times: ScenarioTimes | None = None):
 
     _add_common_devices(ss, times)
 
-    # Sustained tie-line loss -- a real device event, never reclosed.
+    # Sustained tie-line losses -- real device events, never reclosed. Two
+    # of the three parallel Line_4/5/6 circuits lost (a real N-2
+    # contingency), leaving only one tie line in service.
     ss.add('Toggle', dict(model='Line', dev=TIE_TRIP_LINE, t=times.excitation_fault_start_t))
+    ss.add('Toggle', dict(model='Line', dev=TIE_TRIP_LINE_2, t=times.excitation_fault_start_t))
 
     ss.add('Toggle', dict(model='PQ', dev='trip_gen_1', t=times.trip_1_t))
     ss.add('Toggle', dict(model='PQ', dev='trip_gen_2', t=times.trip_2_t))
@@ -264,6 +285,7 @@ def build_corrected(times: ScenarioTimes, detection_t: float):
 
     _add_common_devices(ss, times)
     ss.add('Toggle', dict(model='Line', dev=TIE_TRIP_LINE, t=times.excitation_fault_start_t))
+    ss.add('Toggle', dict(model='Line', dev=TIE_TRIP_LINE_2, t=times.excitation_fault_start_t))
 
     trip_times = {'trip_gen_1': times.trip_1_t, 'trip_gen_2': times.trip_2_t, 'trip_gen_3': times.trip_3_t}
     actions = []
@@ -276,7 +298,8 @@ def build_corrected(times: ScenarioTimes, detection_t: float):
 
     actions.append(
         f"reactive-power redispatch: excitation limit (VRMIN) on generators "
-        f"{EXCITATION_FAULT_GENS} ramped back toward its healthy value starting t={detection_t:.1f}s"
+        f"{EXCITATION_FAULT_GENS + EXCITATION_FAULT_GENS_PARTIAL} ramped back toward its "
+        f"healthy value starting t={detection_t:.1f}s"
     )
 
     # Corrective action: dispatch modeled storage to backstop the disturbance.
