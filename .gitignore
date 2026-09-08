@@ -5,3 +5,6 @@ data/runs/*.json
 reports/latest_report.md
 *.egg-info/
 .ipynb_checkpoints/
+*_out.txt
+*.lst
+*.npz
