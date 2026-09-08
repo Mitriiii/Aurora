@@ -46,16 +46,27 @@ FAULT MAGNITUDES -- DERIVED FROM THIS NETWORK, NOT KUNDUR'S NUMBERS:
     physical timescale of the exciter/field, not an arbitrary pacing
     choice): mean(6.70, 6.56, 5.66) = 6.307s -> 3x = 18.92s.
 
-N-2 CONTINGENCY -- STRUCTURAL, NOT ARBITRARY: this network has NO parallel
-line circuits anywhere (checked explicitly: zero duplicate bus-pairs among
-all 46 lines), unlike Kundur's three parallel tie lines. Each generator
-connects to the 345kV mesh via a single radial line, so losing that one
-line would simply island the generator -- not a meaningful "tie
-weakening." Bus 25 (which feeds generator 37, the primary/lowest-H fault
-target) has exactly two mesh connections besides its generator tie:
-Line_4 (bus 2-25) and Line_40 (bus 25-26). Losing both is a real N-2 that
-isolates bus 25 (and generator 37) from the rest of the 345kV network --
-directly relevant to the selected fault target, not picked for convenience.
+THIS IS A FULL ELECTRICAL ISLAND, NOT A WEAKENED TIE -- confirmed by
+exhaustive check, not assumed. Every line touching bus 25 or bus 37 in the
+whole 46-line network is exactly: Line_4 (bus2-25), Line_40 (bus25-26),
+Line_41 (bus25-37, generator 37's own tie). Removing Line_4 and Line_40
+and running BFS from bus 25 over the remaining topology reaches only
+{25, 37} -- zero path to any of the other 37 buses. So "N-2 tie-line
+loss" is the wrong description and is not used here: this is a full,
+two-bus electrical island (bus 25 + generator 37's own bus), completely
+cut off from the rest of the network, not a corridor left thin but
+connected.
+
+This network has NO parallel line circuits anywhere (checked explicitly:
+zero duplicate bus-pairs among all 46 lines), unlike Kundur's three
+parallel tie lines -- every generator connects to the 345kV mesh via a
+single radial line. That structural fact is exactly why the two
+generator-adjacent lines available at bus 25 (Line_4, Line_40) produce a
+full island rather than a weakened corridor: there was never a third path
+to fall back to. This was the only real, structurally-grounded 2-line
+contingency directly tied to the fault target (generator 37) available in
+this topology -- not picked for convenience, but its actual severity
+(total islanding, not a weakened tie) needs to be named accurately.
 
 A known governor-initialization clamp (TGOV1N's VMIN, on a couple of
 units, worst on bus 39) produces the same benign "Initialization FAILED"
@@ -118,12 +129,12 @@ TGOV1N_BY_BUS = {
 FAULT_GENS_39 = [37, 31, 36]
 VRMIN_FRACTION_OF_VRMAX = 0.75
 EXCITATION_RAMP_DURATION_S = 3 * (sum(GENROU_BY_BUS[b]['Td10'] for b in FAULT_GENS_39) / len(FAULT_GENS_39))
-TIE_LOSS_LINES_39 = ["Line_4", "Line_40"]  # bus2-25, bus25-26: isolates bus 25 (-> gen 37)
+ISLANDING_LINES_39 = ["Line_4", "Line_40"]  # bus2-25, bus25-26: isolates bus 25 (-> gen 37)
 
 
 @dataclass
 class ScenarioTimes39:
-    contingency_t: float = 5.0     # N-2 tie loss + excitation ramp start, together
+    contingency_t: float = 5.0     # islanding event + excitation ramp start, together
     horizon_t: float = 120.0       # longer than Kundur's 60s: this network's H values
                                     # (25-58s on real units) are far larger, dynamics are
                                     # inherently slower
@@ -186,15 +197,32 @@ def apply_excitation_ramp_39(ss, t: float, times: ScenarioTimes39, detection_t: 
         ss.IEEEX1.VRMIN.v[ix] = healthy + frac * (target - healthy)
 
 
-def build_uncorrected_39(times: ScenarioTimes39 | None = None):
-    """The uncorrected timeline: sustained N-2 tie-line loss (Line_4 +
-    Line_40, isolating bus 25 / generator 37) at contingency_t, combined
-    with the gradual VRMIN ramp on generators 37, 31, 36 starting at the
-    same time. No correction, no detector -- this step only."""
+def build_ieee39_case(times: ScenarioTimes39 | None = None, apply_islanding: bool = True,
+                       apply_excitation_fault: bool = True):
+    """Flexible builder used for both the combined fault and the isolation
+    counterfactuals: `apply_islanding` toggles the Line_4+Line_40 island at
+    contingency_t; `apply_excitation_fault` determines whether the run loop
+    should be told to ramp VRMIN at all (the ramp itself is applied
+    tick-by-tick by the caller via apply_excitation_ramp_39 -- if this flag
+    is False, the caller simply never calls it, so VRMIN stays at its
+    healthy value for the whole run). Always attaches GENROU+IEEEX1+TGOV1N
+    to all 10 generators regardless, since that's the network's dynamic
+    baseline, not part of either fault."""
     times = times or ScenarioTimes39()
     ss = _build_base39()
-    for line in TIE_LOSS_LINES_39:
-        ss.add('Toggle', dict(model='Line', dev=line, t=times.contingency_t))
+    if apply_islanding:
+        for line in ISLANDING_LINES_39:
+            ss.add('Toggle', dict(model='Line', dev=line, t=times.contingency_t))
     ss.setup()
     _cache_vrmin_healthy_39(ss)
+    ss._apply_excitation_fault_39 = apply_excitation_fault
     return ss, times
+
+
+def build_uncorrected_39(times: ScenarioTimes39 | None = None):
+    """The uncorrected timeline: a full electrical island (Line_4 + Line_40
+    tripped, cutting bus 25 / generator 37 off from all 37 other buses --
+    confirmed by BFS, not a weakened tie) at contingency_t, combined with
+    the gradual VRMIN ramp on generators 37, 31, 36 starting at the same
+    time. No correction, no detector -- this step only."""
+    return build_ieee39_case(times, apply_islanding=True, apply_excitation_fault=True)

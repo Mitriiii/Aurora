@@ -20,7 +20,7 @@ import numpy as np
 
 from sim.ieee39_scenario import (
     build_uncorrected_39, ScenarioTimes39, apply_excitation_ramp_39,
-    FAULT_GENS_39, TIE_LOSS_LINES_39, EXCITATION_RAMP_DURATION_S, FN_HZ,
+    FAULT_GENS_39, ISLANDING_LINES_39, EXCITATION_RAMP_DURATION_S, FN_HZ,
 )
 from detect.collapse_monitor import CollapseMonitor
 
@@ -35,7 +35,7 @@ def main():
 
     print(f"Fault generators (bus): {FAULT_GENS_39}")
     print(f"Ramp duration (derived, 3x mean Td10): {EXCITATION_RAMP_DURATION_S:.2f}s")
-    print(f"N-2 contingency lines: {TIE_LOSS_LINES_39}")
+    print(f"Islanding lines (bus 25 + gen 37 fully cut off, confirmed by BFS): {ISLANDING_LINES_39}")
     print(f"Contingency/ramp start: t={times.contingency_t}s, horizon: {times.horizon_t}s")
     print()
 
@@ -128,7 +128,7 @@ def main():
         if collapsed:
             ax.axvline(monitor.collapsed_t, color="purple", linewidth=1.4)
 
-    title = f"IEEE 39-bus fault mechanism: N-2 (Line_4+Line_40) + VRMIN ramp on gens 37/31/36\n"
+    title = f"IEEE 39-bus fault mechanism: full island (Line_4+Line_40, bus25+gen37 cut off) + VRMIN ramp on gens 37/31/36\n"
     title += f"COLLAPSE at t={monitor.collapsed_t:.1f}s ({monitor.collapse_reason})" if collapsed else "NO COLLAPSE within horizon"
     fig.suptitle(title)
     fig.tight_layout()
