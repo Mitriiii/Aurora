@@ -20,13 +20,14 @@ import numpy as np
 
 from sim.ieee39_scenario import (
     build_uncorrected_39, ScenarioTimes39, apply_excitation_ramp_39,
-    FAULT_GENS_39, ISLANDING_LINES_39, EXCITATION_RAMP_DURATION_S, FN_HZ,
+    FAULT_GENS_39, WEAKENING_LINES_39, EXCITATION_RAMP_DURATION_S, FN_HZ,
 )
 from detect.collapse_monitor import CollapseMonitor
 
 DT = 0.1
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "runs"
+TRACKED_BUSES = ['4', '14', '16', '17', '2', '6', '29']
 
 
 def main():
@@ -35,7 +36,7 @@ def main():
 
     print(f"Fault generators (bus): {FAULT_GENS_39}")
     print(f"Ramp duration (derived, 3x mean Td10): {EXCITATION_RAMP_DURATION_S:.2f}s")
-    print(f"Islanding lines (bus 25 + gen 37 fully cut off, confirmed by BFS): {ISLANDING_LINES_39}")
+    print(f"Weakening lines (confirmed connected, all 39 buses reachable): {WEAKENING_LINES_39}")
     print(f"Contingency/ramp start: t={times.contingency_t}s, horizon: {times.horizon_t}s")
     print()
 
@@ -56,7 +57,7 @@ def main():
     n_ticks = int(round(times.horizon_t / DT))
 
     t_wall0 = time.time()
-    t_hist, freq_hist, v_hist = [], [], {b: [] for b in ['25', '37', '31', '36', '2', '26']}
+    t_hist, freq_hist, v_hist = [], [], {b: [] for b in TRACKED_BUSES}
     vrmin_hist = []
     collapsed = False
 
@@ -105,8 +106,8 @@ def main():
     t_arr = np.array(t_hist)
     fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
 
-    for b in ['25', '37', '31', '36']:
-        axes[0].plot(t_arr, v_hist[b], label=f"Bus {b}", linewidth=1.1)
+    for b in TRACKED_BUSES:
+        axes[0].plot(t_arr, v_hist[b], label=f"Bus {b}", linewidth=1.0)
     axes[0].set_ylabel("Bus voltage (p.u.)")
     axes[0].legend(fontsize=8)
     axes[0].grid(True, alpha=0.3)
@@ -128,7 +129,7 @@ def main():
         if collapsed:
             ax.axvline(monitor.collapsed_t, color="purple", linewidth=1.4)
 
-    title = f"IEEE 39-bus fault mechanism: full island (Line_4+Line_40, bus25+gen37 cut off) + VRMIN ramp on gens 37/31/36\n"
+    title = f"IEEE 39-bus fault mechanism v2: corridor weakening (Line_9+Line_26, confirmed connected) + VRMIN ramp on gens 30/31/38\n"
     title += f"COLLAPSE at t={monitor.collapsed_t:.1f}s ({monitor.collapse_reason})" if collapsed else "NO COLLAPSE within horizon"
     fig.suptitle(title)
     fig.tight_layout()

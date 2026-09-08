@@ -23,50 +23,78 @@ eastern interconnect") -- not inferred from H=599.5s/xd1=0.005 alone,
 though those values are consistent with a lumped equivalent. Excluded from
 generator selection.
 
-GENERATOR SELECTION: the three lowest-inertia REAL generators (H, in
-seconds, from GENROU.M/2), excluding bus 39:
-    bus 37: H=23.58   (lowest)
-    bus 31: H=25.33   (2nd -- also the power-flow slack bus, but per
-                        case39.m's own comment this is "nuke01", a real
-                        plant; its slack role is a power-flow solving
-                        convenience, not a reason to exclude it once
-                        GENROU dynamics are attached)
-    bus 36: H=27.07   (3rd)
-(next-lowest excluded: bus 34 at H=28.09, bus 32 at H=30.20)
+=== REDESIGN (v2): the two halves must be genuinely independent ===
 
-FAULT MAGNITUDES -- DERIVED FROM THIS NETWORK, NOT KUNDUR'S NUMBERS:
-  - VRMIN ramp target per generator = 0.75 * that generator's own VRMAX
-    (a documented fraction of its physical ceiling, not a copied absolute
-    value): bus37 -> 3.75, bus31 -> 3.90, bus36 -> 4.875. Each is well
-    above that generator's natural steady-state exciter output (vout ~=
-    1.03/0.98/1.06 p.u. respectively, confirmed by a short TDS run before
-    committing to these targets), so the ramp genuinely binds once complete.
-  - Ramp duration = 3 * mean(Td10) of the three fault generators (Td10 is
-    each unit's own transient open-circuit field time constant -- a real
-    physical timescale of the exciter/field, not an arbitrary pacing
-    choice): mean(6.70, 6.56, 5.66) = 6.307s -> 3x = 18.92s.
+v1 of this mechanism (islanding bus 25/generator 37 + VRMIN ramp
+including generator 37) failed its own isolation counterfactuals: BOTH
+halves collapsed the system alone, because generator 37 was simultaneously
+the excitation-fault target AND the specific generator the topology event
+isolated. The "combined" result was really the excitation fault doing all
+the work. This version separates the two concerns by construction and
+re-verifies independence before any combined claim (see
+sim/run_ieee39_isolation_checks.py).
 
-THIS IS A FULL ELECTRICAL ISLAND, NOT A WEAKENED TIE -- confirmed by
-exhaustive check, not assumed. Every line touching bus 25 or bus 37 in the
-whole 46-line network is exactly: Line_4 (bus2-25), Line_40 (bus25-26),
-Line_41 (bus25-37, generator 37's own tie). Removing Line_4 and Line_40
-and running BFS from bus 25 over the remaining topology reaches only
-{25, 37} -- zero path to any of the other 37 buses. So "N-2 tie-line
-loss" is the wrong description and is not used here: this is a full,
-two-bus electrical island (bus 25 + generator 37's own bus), completely
-cut off from the rest of the network, not a corridor left thin but
-connected.
+TOPOLOGY WEAKENING -- A THINNED CORRIDOR, NOT AN ISLAND, VERIFIED BY
+EXHAUSTIVE BFS: removing Line_9 (bus4-14) and Line_26 (bus16-17) together.
+Checked, not assumed: BFS from EVERY one of the 39 buses over the
+remaining 44-line topology reaches all 39 buses every time -- confirmed
+via networkx, not a single reference-bus check. This pair was selected
+from all 562 non-bridge-edge pairs whose joint removal keeps the network
+connected (of 46 lines, 11 are bridges -- single points of failure, all
+9 real-generator ties among them plus one internal mesh bridge at
+bus16-19 -- excluded outright since removing any bridge trivially
+islands something regardless of pairing). Among the 562 safe pairs, this
+one produces the largest increase in average shortest-path length
+(+46.5%, vs the next-best +44.6%), with 490 MW combined pre-fault loading
+-- a real, heavily-used corridor, not a token pick. The naively
+highest-betweenness corridor (the serial chain Line_24/25/26, bus
+14-15-16-17) was checked and REJECTED: bus 15 is degree-2 (isolated alone
+by any two of its links), and removing Line_25+Line_26 disconnects an
+11-bus cluster including three real generators (34, 35, 36) -- betweenness
+rank alone was not sufcient without the explicit connectivity check.
 
-This network has NO parallel line circuits anywhere (checked explicitly:
-zero duplicate bus-pairs among all 46 lines), unlike Kundur's three
-parallel tie lines -- every generator connects to the 345kV mesh via a
-single radial line. That structural fact is exactly why the two
-generator-adjacent lines available at bus 25 (Line_4, Line_40) produce a
-full island rather than a weakened corridor: there was never a third path
-to fall back to. This was the only real, structurally-grounded 2-line
-contingency directly tied to the fault target (generator 37) available in
-this topology -- not picked for convenience, but its actual severity
-(total islanding, not a weakened tie) needs to be named accurately.
+GENERATOR SELECTION -- BY CONCRETE CONNECTIVITY MEASURE, NOT NARRATIVE:
+candidates are the 9 real generators' own attachment buses, scored on two
+measures computed directly from the graph:
+  (a) shortest-path-length change (hops) to a fixed reference bus (bus 1)
+      after the Line_9+Line_26 weakening, i.e. how exposed that generator
+      is to the specific corridor being thinned;
+  (b) edge-connectivity (Menger min-cut size) from the attachment bus to
+      three distant reference buses (1, 16, 27), i.e. how many
+      edge-disjoint paths exist in the UNMODIFIED topology -- a direct,
+      reproducible "how thin is this bus, structurally" measure.
+Results (attachment bus, degree, path-length change, min edge-connectivity):
+    bus 30 (attach bus 2,  degree 4): path 2->2 (+0),  edge-conn 2
+    bus 31 (attach bus 6,  degree 4): path 6->6 (+0),  edge-conn 2
+    bus 32 (attach bus 10, degree 3): path 7->8 (+1),  edge-conn 2
+    bus 33 (attach bus 19, degree 3): path 7->13 (+6), edge-conn 1  EXCLUDED (b)
+    bus 34 (attach bus 20, degree 2): path 8->14 (+6), edge-conn 1  EXCLUDED (a)+(b)
+    bus 35 (attach bus 22, degree 3): path 8->14 (+6), edge-conn 2  EXCLUDED (a)
+    bus 36 (attach bus 23, degree 3): path 8->14 (+6), edge-conn 2  EXCLUDED (a)
+    bus 37 (attach bus 25, degree 3): path 3->3 (+0),  edge-conn 2
+    bus 38 (attach bus 29, degree 3): path 5->5 (+0),  edge-conn 2
+Generators 33 and 34 are structurally thin regardless of this fault
+(edge-connectivity 1 -- a single 2-edge cut, bus16-19 combined with any
+one other edge, already suffices to isolate them; this is the same class
+of fragility v1's bus 25 turned out to have). Generators 34/35/36 are all
+directly adjacent to the new weakened corridor (+6 hops) and excluded on
+that basis regardless of their connectivity score.
+
+That leaves 30, 31, 37, 38 tied at the best available connectivity score
+(2) with zero path-length exposure to the new corridor. Generator 37 is
+deliberately NOT reused here even though it passes both measures on this
+specific corridor -- it was v1's islanded target via a DIFFERENT 2-line
+cut (Line_4+Line_40, still present and inert in this version), and
+reusing it risks confounding this test with that prior, already-known
+fragility. Selected: GENERATORS 30, 31, 38 -- a clean, independent set by
+construction.
+
+FAULT MAGNITUDES -- DERIVED FRESH FOR THESE THREE GENERATORS:
+  - VRMIN ramp target = 0.75 * that generator's own VRMAX (same documented
+    rule as v1, re-applied to the new generators, not the same numbers):
+    bus30 -> 6.00, bus31 -> 3.90, bus38 -> 7.425.
+  - Ramp duration = 3 * mean(Td10) of generators 30, 31, 38:
+    mean(10.2, 6.56, 4.79) = 7.183s -> 3x = 21.55s.
 
 A known governor-initialization clamp (TGOV1N's VMIN, on a couple of
 units, worst on bus 39) produces the same benign "Initialization FAILED"
@@ -125,16 +153,25 @@ TGOV1N_BY_BUS = {
     39: {'R': 0.004170141784820684, 'VMAX': 12.589500000000001, 'VMIN': 1.199, 'T1': 0.05, 'T2': 1.0, 'T3': 2.1, 'Dt': 0.0},
 }
 
-# --- Fault design, derived from this network (see module docstring) ---
-FAULT_GENS_39 = [37, 31, 36]
+# --- Fault design v2, derived from this network (see module docstring) ---
+FAULT_GENS_39 = [30, 31, 38]
 VRMIN_FRACTION_OF_VRMAX = 0.75
 EXCITATION_RAMP_DURATION_S = 3 * (sum(GENROU_BY_BUS[b]['Td10'] for b in FAULT_GENS_39) / len(FAULT_GENS_39))
-ISLANDING_LINES_39 = ["Line_4", "Line_40"]  # bus2-25, bus25-26: isolates bus 25 (-> gen 37)
+
+# Confirmed-connected topology weakening (see module docstring): removing
+# both keeps all 39 buses mutually reachable (exhaustive per-bus BFS),
+# largest avg-shortest-path increase (+46.5%) among all 562 safe pairs.
+WEAKENING_LINES_39 = ["Line_9", "Line_26"]  # bus4-14, bus16-17
+
+# v1's islanding pair, kept only as a named historical reference -- not
+# used by this version's scenario. Present so anyone diffing history can
+# see what changed and why (see module docstring's REDESIGN section).
+_V1_ISLANDING_LINES_39 = ["Line_4", "Line_40"]  # bus2-25, bus25-26: fully islands bus 25 + gen 37
 
 
 @dataclass
 class ScenarioTimes39:
-    contingency_t: float = 5.0     # islanding event + excitation ramp start, together
+    contingency_t: float = 5.0     # corridor weakening + excitation ramp start, together
     horizon_t: float = 120.0       # longer than Kundur's 60s: this network's H values
                                     # (25-58s on real units) are far larger, dynamics are
                                     # inherently slower
@@ -197,21 +234,22 @@ def apply_excitation_ramp_39(ss, t: float, times: ScenarioTimes39, detection_t: 
         ss.IEEEX1.VRMIN.v[ix] = healthy + frac * (target - healthy)
 
 
-def build_ieee39_case(times: ScenarioTimes39 | None = None, apply_islanding: bool = True,
+def build_ieee39_case(times: ScenarioTimes39 | None = None, apply_weakening: bool = True,
                        apply_excitation_fault: bool = True):
     """Flexible builder used for both the combined fault and the isolation
-    counterfactuals: `apply_islanding` toggles the Line_4+Line_40 island at
-    contingency_t; `apply_excitation_fault` determines whether the run loop
-    should be told to ramp VRMIN at all (the ramp itself is applied
-    tick-by-tick by the caller via apply_excitation_ramp_39 -- if this flag
-    is False, the caller simply never calls it, so VRMIN stays at its
-    healthy value for the whole run). Always attaches GENROU+IEEEX1+TGOV1N
-    to all 10 generators regardless, since that's the network's dynamic
-    baseline, not part of either fault."""
+    counterfactuals: `apply_weakening` toggles the Line_9+Line_26 corridor
+    thinning (confirmed connected, not an island) at contingency_t;
+    `apply_excitation_fault` determines whether the run loop should be told
+    to ramp VRMIN at all (the ramp itself is applied tick-by-tick by the
+    caller via apply_excitation_ramp_39 -- if this flag is False, the
+    caller simply never calls it, so VRMIN stays at its healthy value for
+    the whole run). Always attaches GENROU+IEEEX1+TGOV1N to all 10
+    generators regardless, since that's the network's dynamic baseline,
+    not part of either fault."""
     times = times or ScenarioTimes39()
     ss = _build_base39()
-    if apply_islanding:
-        for line in ISLANDING_LINES_39:
+    if apply_weakening:
+        for line in WEAKENING_LINES_39:
             ss.add('Toggle', dict(model='Line', dev=line, t=times.contingency_t))
     ss.setup()
     _cache_vrmin_healthy_39(ss)
@@ -220,9 +258,11 @@ def build_ieee39_case(times: ScenarioTimes39 | None = None, apply_islanding: boo
 
 
 def build_uncorrected_39(times: ScenarioTimes39 | None = None):
-    """The uncorrected timeline: a full electrical island (Line_4 + Line_40
-    tripped, cutting bus 25 / generator 37 off from all 37 other buses --
-    confirmed by BFS, not a weakened tie) at contingency_t, combined with
-    the gradual VRMIN ramp on generators 37, 31, 36 starting at the same
-    time. No correction, no detector -- this step only."""
-    return build_ieee39_case(times, apply_islanding=True, apply_excitation_fault=True)
+    """The uncorrected timeline: a confirmed-connected corridor weakening
+    (Line_9 + Line_26 tripped -- all 39 buses remain mutually reachable,
+    verified by exhaustive BFS) at contingency_t, combined with the
+    gradual VRMIN ramp on generators 30, 31, 38 (deliberately not adjacent
+    to the weakened corridor and not structurally thin -- see module
+    docstring) starting at the same time. No correction, no detector --
+    this step only."""
+    return build_ieee39_case(times, apply_weakening=True, apply_excitation_fault=True)
