@@ -53,7 +53,6 @@ SURGE_B_PU = 14.0                # total capacitive susceptance (p.u. on Sn=100 
 SURGE_STAGES = 3                # surge is split into equal banks so a correction can unwind it gradually
 SURGE_UNWIND_STEP_S = 1.6       # spacing between staged bank de-energizations during correction
 LINE_KICK_IDX = "Line_4"        # tie-line branch used to kick off oscillation
-COLLAPSE_GENS = [2, 3, 4]       # generators shed in the final cascade/UFLS event
 
 PF_LIMIT = 0.98                 # Spain's grid-code reactive power-factor band
 
@@ -74,11 +73,6 @@ class ScenarioTimes:
     # (~0.6 Hz, 12:03-12:07). Compressed here to a same-order-of-magnitude
     # gap so both precursors, and their self-damping, fit inside one run.
     benign_second_kick_t: float = 20.0
-
-    @property
-    def collapse_budget_t(self) -> float:
-        """Real event: ~27s from first trip to total collapse."""
-        return self.trip_1_t + 27.0
 
 
 def _add_common_devices(ss, times: ScenarioTimes, include_first_kick: bool = True):
@@ -177,15 +171,11 @@ def build_uncorrected(times: ScenarioTimes | None = None):
     ss.add('Toggle', dict(model='PQ', dev='trip_gen_2', t=times.trip_2_t))
     ss.add('Toggle', dict(model='PQ', dev='trip_gen_3', t=times.trip_3_t))
 
-    # Final cascading collapse: protection relays + UFLS finish the job,
-    # matching the real event's ~27s first-trip-to-collapse window. This
-    # never fires in the corrected branch because AURORA's intervention
-    # happens well before it would be scheduled.
-    for g in COLLAPSE_GENS:
-        ss.add('Toggle', dict(model='GENROU', dev=g, t=times.collapse_budget_t))
-    ss.add('Toggle', dict(model='Line', dev='Line_4', t=times.collapse_budget_t))
-    ss.add('Toggle', dict(model='Line', dev='Line_5', t=times.collapse_budget_t))
-    ss.add('Toggle', dict(model='Line', dev='Line_6', t=times.collapse_budget_t))
+    # No hardcoded final-collapse event. Whether and when this branch
+    # collapses is now entirely a product of the physics above plus
+    # whatever the three trips do to it -- decided at run time by
+    # detect.collapse_monitor.CollapseMonitor against real protective
+    # thresholds, not asserted here.
 
     ss.setup()
     return ss, times

@@ -24,6 +24,7 @@ import andes
 from sim.kundur_system import build_uncorrected, build_corrected, ScenarioTimes, PF_LIMIT
 from sim.pmu_stream import capture_frame, MONITORED_BUSES, DETECTOR_BUSES, PMU_RATE_HZ
 from detect.threshold_detector import ThresholdDetector
+from detect.collapse_monitor import CollapseMonitor
 
 DT = 0.1  # tick resolution used for detection + streaming (10 Hz; PMU-record rate is separate)
 RUNS_DIR = Path(__file__).resolve().parent.parent / "data" / "runs"
@@ -31,9 +32,11 @@ RUNS_DIR = Path(__file__).resolve().parent.parent / "data" / "runs"
 
 def _run_branch(ss, times: ScenarioTimes, dt: float, detector: ThresholdDetector | None,
                  stop_after_collapse_s: float = 2.0):
-    """Advance TDS tick-by-tick, capturing a PMU frame and (optionally)
-    feeding the live detector at every step. Returns (frames, detector_log,
-    collapse_t | None)."""
+    """Advance TDS tick-by-tick, capturing a PMU frame, feeding the live
+    detector (if given), and feeding a CollapseMonitor that decides -- from
+    real protective thresholds, not a scripted time budget -- whether and
+    when this branch has actually collapsed. Returns (frames, detector_log,
+    collapse_t | None, collapse_reason | None)."""
     ss.PFlow.run()
     ss.TDS.config.tf = times.horizon_t
     ss.TDS.config.criteria = 0
@@ -41,16 +44,20 @@ def _run_branch(ss, times: ScenarioTimes, dt: float, detector: ThresholdDetector
     n_ticks = int(round(times.horizon_t / dt))
     frames, detector_log = [], []
     prev_freq = None
-    collapse_t = None
+    monitor = CollapseMonitor(monitored_buses=[str(b) for b in MONITORED_BUSES], dt=dt)
 
     for i in range(1, n_ticks + 1):
         t_target = round(i * dt, 6)
         ss.TDS.config.tf = t_target
         ss.TDS.run()
+        tds_ok = ss.TDS.converged
 
-        if not ss.TDS.converged:
-            collapse_t = collapse_t if collapse_t is not None else t_target
-            collapsed_frame = {
+        if tds_ok:
+            pf = capture_frame(ss, t_target, prev_freq_hz=prev_freq, dt=dt)
+            prev_freq = pf.freq_hz
+            frame = pf.to_dict()
+        else:
+            frame = {
                 "t": t_target, "freq_hz": 0.0, "rocof_hz_s": 0.0,
                 "bus_v_pu": {str(b): 0.0 for b in MONITORED_BUSES},
                 "bus_angle_deg": {str(b): 0.0 for b in MONITORED_BUSES},
@@ -59,25 +66,29 @@ def _run_branch(ss, times: ScenarioTimes, dt: float, detector: ThresholdDetector
                 "data_quality": "MISSING",
                 "status_flags": {"islanded": True, "collapsed": True},
             }
-            # Solver has already declared collapse -- pad the remaining
-            # buffer with the same frame instead of re-attempting the solve.
-            n_remaining = min(n_ticks - i + 1, int(round(stop_after_collapse_s / dt)))
-            for j in range(n_remaining):
-                pad = dict(collapsed_frame)
-                pad["t"] = round(t_target + j * dt, 3)
-                frames.append(pad)
-            break
 
-        pf = capture_frame(ss, t_target, prev_freq_hz=prev_freq, dt=dt)
-        prev_freq = pf.freq_hz
-        frame = pf.to_dict()
+        monitor.update(frame, tds_ok)
         frames.append(frame)
 
         if detector is not None:
             det = detector.update(frame)
             detector_log.append(det)
 
-    return frames, detector_log, collapse_t
+        if monitor.collapsed:
+            # Pad a short buffer past the collapse point (for the dashboard
+            # replay), rather than continuing to integrate a state we've
+            # already determined is no longer physically meaningful.
+            n_remaining = min(n_ticks - i, int(round(stop_after_collapse_s / dt)))
+            for j in range(1, n_remaining + 1):
+                pad = dict(frame)
+                pad["t"] = round(t_target + j * dt, 3)
+                frames.append(pad)
+            break
+
+        if not tds_ok:
+            break
+
+    return frames, detector_log, monitor.collapsed_t, monitor.collapse_reason
 
 
 def run_full_scenario(dt: float = DT) -> dict:
@@ -88,7 +99,7 @@ def run_full_scenario(dt: float = DT) -> dict:
 
     ss_u, _ = build_uncorrected(times)
     detector = ThresholdDetector(monitored_buses=[str(b) for b in DETECTOR_BUSES], dt=dt)
-    frames_u, det_log, collapse_t = _run_branch(ss_u, times, dt, detector)
+    frames_u, det_log, collapse_t, collapse_reason = _run_branch(ss_u, times, dt, detector)
 
     detection_t = detector.fired_t
     detection_reasons = detector.fired_reasons
@@ -103,6 +114,7 @@ def run_full_scenario(dt: float = DT) -> dict:
         "detection_t": detection_t,
         "detection_reasons": detection_reasons,
         "collapse_t": collapse_t,
+        "collapse_reason": collapse_reason,
         "lead_time_to_first_trip_s": lead_time_to_first_trip,
         "lead_time_to_collapse_s": lead_time_to_collapse,
         "actions_taken": [],
@@ -111,7 +123,7 @@ def run_full_scenario(dt: float = DT) -> dict:
     corrected_result = None
     if detection_t is not None:
         ss_c, actions = build_corrected(times, detection_t)
-        frames_c, _, collapse_t_c = _run_branch(ss_c, times, dt, detector=None)
+        frames_c, _, collapse_t_c, collapse_reason_c = _run_branch(ss_c, times, dt, detector=None)
         corrected_result = {
             "branch": "corrected",
             "label": "AURORA intervenes",
@@ -120,6 +132,7 @@ def run_full_scenario(dt: float = DT) -> dict:
             "detection_t": detection_t,
             "detection_reasons": detection_reasons,
             "collapse_t": collapse_t_c,
+            "collapse_reason": collapse_reason_c,
             "actions_taken": actions,
         }
 
@@ -154,9 +167,13 @@ def main():
           f"(lead time: {u['lead_time_to_first_trip_s']}s)")
     print(f"Uncorrected collapse at t={u['collapse_t']}s "
           f"(lead time to collapse: {u['lead_time_to_collapse_s']}s)")
+    if u["collapse_reason"]:
+        print(f"  collapse reason: {u['collapse_reason']}")
     if result["corrected"]:
         c = result["corrected"]
         print(f"Corrected branch collapse: {c['collapse_t']}")
+        if c["collapse_reason"]:
+            print(f"  collapse reason: {c['collapse_reason']}")
         for a in c["actions_taken"]:
             print(f"  - {a}")
     print(f"Saved to {RUNS_DIR / 'latest.json'}")
