@@ -68,7 +68,8 @@ def main():
     axes[2].grid(True, alpha=0.3)
 
     for ax in axes:
-        ax.axvline(times["surge_on_t"], color="orange", linestyle="--", linewidth=1, label="surge onset")
+        ax.axvline(times["excitation_fault_start_t"], color="orange", linestyle="--", linewidth=1,
+                   label="tie-line loss / excitation ramp start")
         if u["detection_t"] is not None:
             ax.axvline(u["detection_t"], color="red", linestyle="-", linewidth=1.4, label="AURORA detection")
         ax.axvline(times["trip_1_t"], color="black", linestyle="--", linewidth=1, label="trip 1")

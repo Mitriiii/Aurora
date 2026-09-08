@@ -46,7 +46,7 @@ def generate_report(result: dict) -> str:
     lines.append("| Time | Event |")
     lines.append("|---|---|")
     lines.append(f"| t={times['line_kick_t']:.1f}s | Precursor tie-line disturbance (kicks off the inter-area oscillation) |")
-    lines.append(f"| t={times['surge_on_t']:.1f}s | Reactive-power surge onset (excess capacitive charging, unabsorbed) |")
+    lines.append(f"| t={times['excitation_fault_start_t']:.1f}s | Sustained tie-line loss / excitation-limit ramp begins |")
     if u["detection_t"] is not None:
         lines.append(f"| **t={u['detection_t']:.1f}s** | **AURORA danger flag fires** |")
     lines.append(f"| t={times['trip_1_t']:.1f}s | First generation trip (historical: ~317 MW) |")

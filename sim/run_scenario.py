@@ -21,7 +21,7 @@ from pathlib import Path
 
 import andes
 
-from sim.kundur_system import build_uncorrected, build_corrected, ScenarioTimes, PF_LIMIT
+from sim.kundur_system import build_uncorrected, build_corrected, ScenarioTimes, PF_LIMIT, apply_excitation_ramp
 from sim.pmu_stream import capture_frame, MONITORED_BUSES, DETECTOR_BUSES, PMU_RATE_HZ
 from detect.threshold_detector import ThresholdDetector
 from detect.collapse_monitor import CollapseMonitor
@@ -31,11 +31,15 @@ RUNS_DIR = Path(__file__).resolve().parent.parent / "data" / "runs"
 
 
 def _run_branch(ss, times: ScenarioTimes, dt: float, detector: ThresholdDetector | None,
-                 stop_after_collapse_s: float = 2.0):
+                 stop_after_collapse_s: float = 2.0, apply_ramp: bool = False,
+                 ramp_detection_t: float | None = None):
     """Advance TDS tick-by-tick, capturing a PMU frame, feeding the live
     detector (if given), and feeding a CollapseMonitor that decides -- from
     real protective thresholds, not a scripted time budget -- whether and
-    when this branch has actually collapsed. Returns (frames, detector_log,
+    when this branch has actually collapsed. If `apply_ramp` is set, the
+    excitation-limit ramp (sim.kundur_system.apply_excitation_ramp) is
+    applied every tick before advancing TDS, since ANDES parameters are
+    static within a single TDS.run() call. Returns (frames, detector_log,
     collapse_t | None, collapse_reason | None)."""
     ss.PFlow.run()
     ss.TDS.config.tf = times.horizon_t
@@ -48,6 +52,8 @@ def _run_branch(ss, times: ScenarioTimes, dt: float, detector: ThresholdDetector
 
     for i in range(1, n_ticks + 1):
         t_target = round(i * dt, 6)
+        if apply_ramp:
+            apply_excitation_ramp(ss, t_target, times, detection_t=ramp_detection_t)
         ss.TDS.config.tf = t_target
         ss.TDS.run()
         tds_ok = ss.TDS.converged
@@ -91,7 +97,7 @@ def _run_branch(ss, times: ScenarioTimes, dt: float, detector: ThresholdDetector
     return frames, detector_log, monitor.collapsed_t, monitor.collapse_reason
 
 
-def run_full_scenario(dt: float = DT) -> dict:
+def run_full_scenario(dt: float = DT, run_corrected: bool = True) -> dict:
     andes.config_logger(stream_level=30)
     times = ScenarioTimes()
 
@@ -99,7 +105,7 @@ def run_full_scenario(dt: float = DT) -> dict:
 
     ss_u, _ = build_uncorrected(times)
     detector = ThresholdDetector(monitored_buses=[str(b) for b in DETECTOR_BUSES], dt=dt)
-    frames_u, det_log, collapse_t, collapse_reason = _run_branch(ss_u, times, dt, detector)
+    frames_u, det_log, collapse_t, collapse_reason = _run_branch(ss_u, times, dt, detector, apply_ramp=True)
 
     detection_t = detector.fired_t
     detection_reasons = detector.fired_reasons
@@ -121,9 +127,10 @@ def run_full_scenario(dt: float = DT) -> dict:
     }
 
     corrected_result = None
-    if detection_t is not None:
+    if run_corrected and detection_t is not None:
         ss_c, actions = build_corrected(times, detection_t)
-        frames_c, _, collapse_t_c, collapse_reason_c = _run_branch(ss_c, times, dt, detector=None)
+        frames_c, _, collapse_t_c, collapse_reason_c = _run_branch(
+            ss_c, times, dt, detector=None, apply_ramp=True, ramp_detection_t=detection_t)
         corrected_result = {
             "branch": "corrected",
             "label": "AURORA intervenes",
@@ -152,7 +159,10 @@ def run_full_scenario(dt: float = DT) -> dict:
 
 def main():
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    result = run_full_scenario()
+    # Phase 4 (corrected branch) intentionally NOT run here -- the new
+    # excitation-ramp fault mechanism has not yet been validated for Phase
+    # 4, per instruction to stop and report on Phase 2/3 first.
+    result = run_full_scenario(run_corrected=False)
 
     with open(RUNS_DIR / "latest.json", "w") as f:
         json.dump(result, f)
