@@ -67,7 +67,7 @@ TIE_TRIP_LINE = "Line_5"        # sustained (not reclosed) single tie-line loss 
 # and how far. EXDC2.VRMIN defaults to -4.16 p.u. in this case file (read
 # and cached at build time, not hardcoded, in case the case file changes).
 EXCITATION_FAULT_GENS = [3, 4]      # Area-2 machines, nearest the tie/trip region
-VRMIN_FAULT_TARGET = 3.5            # p.u. -- raised well above the generators' natural
+VRMIN_FAULT_TARGET = 4.8            # p.u. -- raised well above the generators' natural
                                      # operating field voltage (~1.8-2.2 p.u. steady state),
                                      # so once the ramp catches up, they can no longer
                                      # reduce excitation enough to absorb reactive power.
