@@ -27,7 +27,7 @@ from detect.collapse_monitor import CollapseMonitor
 DT = 0.1
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "runs"
-TRACKED_BUSES = ['4', '14', '16', '17', '2', '6', '29']
+TRACKED_BUSES = ['4', '14', '16', '17', '2', '6', '29', '30', '31', '38']
 
 
 def main():
@@ -60,6 +60,7 @@ def main():
     t_hist, freq_hist, v_hist = [], [], {b: [] for b in TRACKED_BUSES}
     vrmin_hist = []
     collapsed = False
+    max_v_global, max_v_global_bus = 0.0, None
 
     for i in range(1, n_ticks + 1):
         t_target = round(i * DT, 6)
@@ -73,6 +74,9 @@ def main():
             freq_hz = omega_mean * FN_HZ
             frame_v = {str(b): float(ss.Bus.v.v[k]) for k, b in enumerate(bus_list)}
             frame = {"t": t_target, "freq_hz": freq_hz, "bus_v_pu": frame_v}
+            for b, v in frame_v.items():
+                if v > max_v_global:
+                    max_v_global, max_v_global_bus = v, b
         else:
             freq_hz = 0.0
             frame = {"t": t_target, "freq_hz": 0.0, "bus_v_pu": {b: 0.0 for b in all_buses}}
@@ -101,6 +105,8 @@ def main():
         print(f"Final frequency: {freq_hist[-1]:.4f} Hz")
         print(f"Final bus voltages (spot check): " +
               ", ".join(f"bus{b}={v_hist[b][-1]:.4f}" for b in v_hist))
+        print(f"Max voltage seen across ALL 39 buses: {max_v_global:.4f} p.u. at bus {max_v_global_bus} "
+              f"({100*max_v_global/1.5:.1f}% of the 1.5 p.u. collapse threshold)")
 
     # ---------- Plot ----------
     t_arr = np.array(t_hist)
