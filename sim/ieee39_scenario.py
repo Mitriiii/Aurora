@@ -89,12 +89,45 @@ reusing it risks confounding this test with that prior, already-known
 fragility. Selected: GENERATORS 30, 31, 38 -- a clean, independent set by
 construction.
 
-FAULT MAGNITUDES -- DERIVED FRESH FOR THESE THREE GENERATORS:
-  - VRMIN ramp target = 0.75 * that generator's own VRMAX (same documented
-    rule as v1, re-applied to the new generators, not the same numbers):
-    bus30 -> 6.00, bus31 -> 3.90, bus38 -> 7.425.
-  - Ramp duration = 3 * mean(Td10) of generators 30, 31, 38:
-    mean(10.2, 6.56, 4.79) = 7.183s -> 3x = 21.55s.
+FAULT MAGNITUDES -- v2.0 (0.75*VRMAX) DERIVED FRESH FOR THESE THREE
+GENERATORS BUT TOO SEVERE, RECALIBRATED IN v2.1:
+  - v2.0's rule (VRMIN target = 0.75 * that generator's own VRMAX, same
+    fraction as v1 but re-applied to the new generators) gave bus30->6.00,
+    bus31->3.90, bus38->7.425. The excitation-alone isolation counterfactual
+    (all three together, network intact) collapsed at t=22.4s. Diagnosed by
+    testing each generator ALONE at 0.75: every single one collapsed the
+    network by itself (bus30 at t=29.4s, bus31 at t=20.6s, bus38 at
+    t=17.1s) -- this was not a generator-count or generator-size problem
+    (dropping bus 38, the largest unit at 1684 MVA, and testing 30+31 alone
+    still collapsed at t=24.4s), it was the fraction itself being too large
+    for any of these generators individually.
+
+=== REDESIGN v2.1: recalibrating the fraction to genuinely marginal ===
+
+Swept VRMIN_FRACTION_OF_VRMAX per generator, alone, over an extended 180s
+horizon (120s was too short to resolve marginal cases -- see horizon note
+on ScenarioTimes39). Findings, which inverted the initial size hypothesis:
+bus 38 (the 1684 MVA unit) turned out to be the LEAST individually
+sensitive of the three (bounded at 1.06-1.18 p.u. even at fraction 0.08-0.12),
+while bus 30 (1040 MVA, but the highest Td10 at 10.2s) was the MOST
+sensitive -- it eventually collapses (slowly) even at fraction 0.08
+(t=53.1s) and only stays bounded at fraction <=0.06 (max voltage 1.493 at
+frac=0.06). Bus 31 alone stays bounded through frac=0.10 (max voltage 1.495).
+
+The isolation counterfactual that actually matters is all three fault
+generators applied SIMULTANEOUSLY (that is what "excitation ramp alone"
+means), so the combined 3-generator fraction was swept directly, not
+inferred from the single-generator results: frac 0.05 -> max voltage 1.453
+(no collapse); frac 0.06 -> max voltage 1.477 (no collapse); frac 0.065 ->
+collapses, but only after t=148.1s within a 180s horizon; frac 0.07 ->
+collapses at t=52.1s. VRMIN_FRACTION_OF_VRMAX = 0.06 selected: genuinely
+close to the 1.5 p.u. threshold (98.4% of the way there) without crossing
+it, and just 0.005 below the fraction that eventually would.
+
+  - VRMIN ramp target = 0.06 * that generator's own VRMAX:
+    bus30 -> 0.48, bus31 -> 0.312, bus38 -> 0.594.
+  - Ramp duration unchanged (does not depend on the fraction): 3 * mean(Td10)
+    of generators 30, 31, 38 = 3 * mean(10.2, 6.56, 4.79) = 3 * 7.183 = 21.55s.
 
 A known governor-initialization clamp (TGOV1N's VMIN, on a couple of
 units, worst on bus 39) produces the same benign "Initialization FAILED"
@@ -155,7 +188,9 @@ TGOV1N_BY_BUS = {
 
 # --- Fault design v2, derived from this network (see module docstring) ---
 FAULT_GENS_39 = [30, 31, 38]
-VRMIN_FRACTION_OF_VRMAX = 0.75
+VRMIN_FRACTION_OF_VRMAX = 0.06  # recalibrated -- see REDESIGN (v2.1) in the module docstring;
+                                 # 0.75 collapsed the network from EVERY one of these generators
+                                 # individually, let alone combined
 EXCITATION_RAMP_DURATION_S = 3 * (sum(GENROU_BY_BUS[b]['Td10'] for b in FAULT_GENS_39) / len(FAULT_GENS_39))
 
 # Confirmed-connected topology weakening (see module docstring): removing
@@ -172,9 +207,11 @@ _V1_ISLANDING_LINES_39 = ["Line_4", "Line_40"]  # bus2-25, bus25-26: fully islan
 @dataclass
 class ScenarioTimes39:
     contingency_t: float = 5.0     # corridor weakening + excitation ramp start, together
-    horizon_t: float = 120.0       # longer than Kundur's 60s: this network's H values
-                                    # (25-58s on real units) are far larger, dynamics are
-                                    # inherently slower
+    horizon_t: float = 180.0       # longer than v2's 120s: at a marginal fraction (0.06),
+                                    # the collapse/no-collapse boundary itself takes up to
+                                    # ~150s to resolve (see REDESIGN v2.1) -- 120s would have
+                                    # silently misreported a marginal-but-eventually-collapsing
+                                    # case as "no collapse"
 
 
 def _build_base39():

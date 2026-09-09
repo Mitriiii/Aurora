@@ -33,7 +33,12 @@ from detect.collapse_monitor import CollapseMonitor
 
 DT = 0.1
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
-TRACKED_BUSES = ['4', '14', '16', '17', '2', '6', '29']  # corridor endpoints + fault-gen attachment buses
+# Corridor endpoints (case a) + fault-generator buses AND their attachment
+# buses (case b) -- generator buses themselves, not just their attachment
+# points, are where the excitation fault actually peaks (confirmed by an
+# earlier version of this script under-tracking this and understating the
+# margin to threshold).
+TRACKED_BUSES = ['4', '14', '16', '17', '2', '6', '29', '30', '31', '38']
 
 
 def run_case(label: str, apply_weakening: bool, apply_excitation_fault: bool, times: ScenarioTimes39):
@@ -55,6 +60,8 @@ def run_case(label: str, apply_weakening: bool, apply_excitation_fault: bool, ti
 
     t_hist, freq_hist = [], []
     v_track = {b: [] for b in TRACKED_BUSES}
+    max_v_global = 0.0
+    max_v_global_bus = None
 
     for i in range(1, n_ticks + 1):
         t_target = round(i * DT, 6)
@@ -69,6 +76,9 @@ def run_case(label: str, apply_weakening: bool, apply_excitation_fault: bool, ti
             freq_hz = omega_mean * FN_HZ
             frame_v = {str(b): float(ss.Bus.v.v[k]) for k, b in enumerate(bus_list)}
             frame = {"t": t_target, "freq_hz": freq_hz, "bus_v_pu": frame_v}
+            for b, v in frame_v.items():
+                if v > max_v_global:
+                    max_v_global, max_v_global_bus = v, b
         else:
             freq_hz = 0.0
             frame = {"t": t_target, "freq_hz": 0.0, "bus_v_pu": {b: 0.0 for b in all_buses}}
@@ -90,12 +100,13 @@ def run_case(label: str, apply_weakening: bool, apply_excitation_fault: bool, ti
         print(f"  Final frequency: {freq_hist[-1]:.4f} Hz")
         print(f"  Final voltages: " + ", ".join(f"bus{b}={v_track[b][-1]:.4f}" for b in v_track))
         print(f"  Max |freq-{FN_HZ:.0f}| over run: {max(abs(f-FN_HZ) for f in freq_hist):.4f} Hz")
-        print(f"  Max voltage seen (any tracked bus): {max(max(v) for v in v_track.values()):.4f} p.u.")
+        print(f"  Max voltage seen across ALL 39 buses: {max_v_global:.4f} p.u. at bus {max_v_global_bus} "
+              f"({100*max_v_global/1.5:.1f}% of the 1.5 p.u. collapse threshold)")
     print()
 
     return dict(label=label, t=np.array(t_hist), freq=np.array(freq_hist), v=v_track,
                 collapsed=monitor.collapsed, collapsed_t=monitor.collapsed_t,
-                collapse_reason=monitor.collapse_reason)
+                collapse_reason=monitor.collapse_reason, max_v_global=max_v_global)
 
 
 def main():
