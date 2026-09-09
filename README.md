@@ -81,6 +81,41 @@ web/       Dashboard frontend (vanilla HTML/CSS/JS, no build step)
 reports/   Phase 6 forensic report generator
 ```
 
+## IEEE 39-bus network (Phase 7, in progress)
+
+A second, larger network (`sim/ieee39_system.py`, `sim/ieee39_scenario.py`) is being brought up
+in parallel, per the build brief's Section 4.1 "this scales" argument. `case39.m` is pulled from
+MATPOWER's own GitHub repo and imported via ANDES's MATPOWER support; since raw MATPOWER format
+carries no dynamics, minimal (Phase 0/1 toolchain check) or full (fault-mechanism work) generator
+models are added on top, sourced from ANDES's bundled `ieee39_full.xlsx` and cited explicitly in
+code, never invented.
+
+Facts worth keeping visible, the same way Kundur's own caveats are documented above:
+
+- **Bus 39 is not a real generator.** Per `case39.m`'s own header comment, it's a lumped
+  equivalent for "the interconnection to rest of US/Canada" (added by the case's original
+  authors). Excluded from all fault-target selection.
+- **Generator model coverage: all 10 generators have a functioning exciter, not just the 3 used
+  in the current fault.** `sim/ieee39_scenario.py`'s `_build_base39()` attaches GENROU + IEEEX1
+  (exciter) + TGOV1N (governor) to every one of the 10 generators; `FAULT_GENS_39` (currently
+  30/31/38) only controls which 3 get their VRMIN ramped as the fault. Confirmed live
+  (`ss.IEEEX1.n == 10`, every one actively regulating). This means the calibration finding that a
+  *single* one of these generators at 0.75×VRMAX could collapse the whole network by itself is a
+  real statement about this network's electrical stiffness, not an artifact of missing AVR
+  coverage elsewhere.
+- **The fault mechanism (topology weakening + excitation ramp) went through two redesigns before
+  being trusted**, following the same isolation-counterfactual discipline used on the Kundur
+  mechanism: v1's islanding target and excitation target were the same generator (confounded,
+  both "halves" collapsed alone); v2.0's excitation magnitude was independently sufficient to
+  collapse the network from any one of its three target generators alone. v2.1 (current) has both
+  halves confirmed marginal-but-insufficient alone (70.9% and 98.4% of the collapse threshold
+  respectively) before any combined result is reported. See the module docstring in
+  `sim/ieee39_scenario.py` for the full derivation and the isolation-counterfactual results.
+- **Not yet wired into the dashboard.** The 39-bus work exists as standalone scripts
+  (`python -m sim.run_ieee39_scenario`, `python -m sim.run_ieee39_isolation_checks`) producing
+  static plots in `reports/`, not the interactive `server/main.py` + `web/` dashboard, which still
+  runs the Kundur scenario only.
+
 ## Out of scope for this MVP
 
 Live GPS tracking, in-app chat, payments/invoicing, a driver mobile app, customs services,

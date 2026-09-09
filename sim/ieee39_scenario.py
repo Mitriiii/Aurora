@@ -129,6 +129,28 @@ it, and just 0.005 below the fraction that eventually would.
   - Ramp duration unchanged (does not depend on the fraction): 3 * mean(Td10)
     of generators 30, 31, 38 = 3 * mean(10.2, 6.56, 4.79) = 3 * 7.183 = 21.55s.
 
+GENERATOR MODEL COVERAGE -- CONFIRMED, NOT ASSUMED: all 10 generators get
+a functioning GENROU + IEEEX1 (exciter) + TGOV1N (governor) model in
+_build_base39(), not just the 3 used as excitation-fault targets
+(FAULT_GENS_39). Verified live: `ss.GENROU.n == ss.IEEEX1.n ==
+ss.TGOV1N.n == 10` after building, and every one of the 10 IEEEX1 devices
+produces a sane, actively-regulating vout (0.98-1.06 p.u.) in a short TDS
+run. FAULT_GENS_39 controls only which generators get their VRMIN ramped
+by apply_excitation_ramp_39 -- the other 7 (8, counting bus 39's
+equivalent) are fully modeled and actively regulating the whole time, not
+inert placeholders.
+
+This matters for interpreting the calibration finding in REDESIGN v2.1
+above: a single one of these generators, forced to 0.75*VRMAX, was
+sufficient to collapse the entire network BY ITSELF even though every
+other generator's AVR was fully present and actively regulating normally.
+That is not an artifact of incomplete exciter coverage -- it is a real
+statement about this network's electrical stiffness: one machine pushed
+most of the way to its field-voltage ceiling can locally overwhelm voltage
+control at its own bus regardless of how well-regulated the rest of the
+system is. The eventual v2.1 fraction (0.06) is calibrated against that
+real finding, not against a modeling gap.
+
 A known governor-initialization clamp (TGOV1N's VMIN, on a couple of
 units, worst on bus 39) produces the same benign "Initialization FAILED"
 residual-mismatch warning seen on Kundur's TGOV1; fixed the same way
