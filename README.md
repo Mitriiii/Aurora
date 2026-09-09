@@ -115,6 +115,23 @@ Facts worth keeping visible, the same way Kundur's own caveats are documented ab
   (`python -m sim.run_ieee39_scenario`, `python -m sim.run_ieee39_isolation_checks`) producing
   static plots in `reports/`, not the interactive `server/main.py` + `web/` dashboard, which still
   runs the Kundur scenario only.
+- **The Kundur-validated detector does not transfer to this network, and the honest lead time is
+  short.** `detect/threshold_detector.ThresholdDetector` (a magnitude threshold on a P/Q-derived
+  reactive-margin proxy) false-fires on both isolation counterfactuals here within 10-12 seconds --
+  ordinary AVR transients on generators not even under fault exceed its Kundur-calibrated
+  threshold. Diagnosis showed the underlying reason is structural, not a tuning miss: bus 30's
+  voltage (the bus that actually crosses the collapse threshold) is **nearly identical** between
+  the excitation-alone counterfactual and the combined fault for the first ~57 seconds -- no
+  causal detector can tell these two futures apart before they actually diverge. A redesigned
+  detector (`detect/sustained_growth_detector.SustainedGrowthDetector`) tracks bus voltage
+  directly (not the margin proxy, which turned out not to discriminate at all on this network) and
+  fires on a "plateaued, then broke past that plateau" pattern rather than a magnitude threshold.
+  Validated against all three cases (silent on both non-collapsing counterfactuals over their full
+  horizon, fires on the real fault) plus a causal check (confirmed the firing tick shows a real,
+  ~3x-larger breakout than the same tick's noise level in the benign case, which does not continue
+  to climb in the following 6s). Result: **detection at t=64.2s, collapse at t=66.5s -- a 2.3s
+  lead time, shorter than the ~4s SCADA refresh cycle it's being compared against.** Reported as
+  found, not adjusted to look better; see `sim/run_ieee39_detection_check.py`.
 
 ## Out of scope for this MVP
 
